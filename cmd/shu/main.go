@@ -23,7 +23,7 @@ func main() {
 		must(daemon.Run(os.Args[2:]))
 	case "init-user":
 		must(server.InitUser(os.Args[2:]))
-	case "workspace", "token", "executor", "resource", "work", "agent", "issue", "comment", "attachment", "events", "inbox", "squad", "autopilot", "tab":
+	case "workspace", "token", "executor", "resource", "work", "agent", "issue", "comment", "attachment", "events", "inbox", "squad", "autopilot":
 		must(cli.Run(os.Args[1:]))
 	default:
 		usage()
@@ -69,7 +69,5 @@ CLI:
   shu squad add <squad> <agent>
   shu autopilot create <name> <assignee> <interval-seconds> <prompt>
   shu autopilot list|run <id>
-  shu tab open <route> [title]
-  shu tab list
   shu events watch`)
 }

@@ -84,25 +84,21 @@ func (a *App) sendChatMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 404, err.Error())
 		return
 	}
-	writeRow(w, a.db.QueryRow(r.Context(), `insert into chat_messages(workspace_id,session_id,role,content) values($1,$2,$3,$4) returning id,role,content,created_at`, ws, r.PathValue("sessionId"), in.Role, in.Content), "id", "role", "content", "created_at")
+	var id int64
+	var role, content string
+	var created any
+	if err := a.db.QueryRow(r.Context(), `insert into chat_messages(workspace_id,session_id,role,content) values($1,$2,$3,$4) returning id,role,content,created_at`, ws, r.PathValue("sessionId"), in.Role, in.Content).Scan(&id, &role, &content, &created); err != nil {
+		writeError(w, r, 500, err.Error())
+		return
+	}
+	a.activityStore().Record(r.Context(), ws, ref(EntityChatSession, r.PathValue("sessionId")), "chat.message.created", EntityRef{}, map[string]any{"message_id": id, "role": role})
+	writeJSON(w, map[string]any{"id": id, "role": role, "content": content, "created_at": created})
 }
 
 func (a *App) listChatMessages(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireObjectRole(w, r, "chat_sessions", r.PathValue("sessionId"), RoleMember); !ok {
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `select id,role,content,failure_reason,elapsed_ms,created_at from chat_messages where session_id=$1 order by id`, r.PathValue("sessionId"))
-	writeRows(w, rows, err, "id", "role", "content", "failure_reason", "elapsed_ms", "created_at")
-}
-
-func (a *App) markChatSessionRead(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.requireObjectRole(w, r, "chat_sessions", r.PathValue("sessionId"), RoleMember); !ok {
-		return
-	}
-	_, err := a.db.Exec(r.Context(), `update chat_sessions set unread_since=null where id=$1`, r.PathValue("sessionId"))
-	if err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"read": true})
+	rows, err := a.db.Query(r.Context(), `select id,role,content,created_at from chat_messages where session_id=$1 order by id`, r.PathValue("sessionId"))
+	writeRows(w, rows, err, "id", "role", "content", "created_at")
 }

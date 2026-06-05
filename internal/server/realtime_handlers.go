@@ -32,6 +32,22 @@ func (a *App) publish(ctx context.Context, e Event) {
 	if e.TS.IsZero() {
 		e.TS = time.Now()
 	}
+	if e.WorkspaceID != "" {
+		payload := map[string]any{}
+		if e.Payload != nil {
+			bp, _ := json.Marshal(e.Payload)
+			_ = json.Unmarshal(bp, &payload)
+		}
+		subject := EntityRef{}
+		if id := stringAny(payload["work_id"]); id != "" {
+			subject = ref(EntityWork, id)
+		} else if id := stringAny(payload["resource_id"]); id != "" {
+			subject = ref(EntityResource, id)
+		} else if id := stringAny(payload["action_id"]); id != "" {
+			subject = ref(EntityAction, id)
+		}
+		a.activityStore().Record(ctx, e.WorkspaceID, subject, e.Type, EntityRef{}, payload)
+	}
 	b, _ := json.Marshal(e)
 	if e.ExecutorID != "" && a.hub != nil {
 		a.hub.Send(e.ExecutorID, b)

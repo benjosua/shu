@@ -11,6 +11,9 @@ func buildWorkPrompt(work ClaimedWork) string {
 	if work.Agent.Name != "" {
 		fmt.Fprintf(&b, "You are agent %q.\n", work.Agent.Name)
 	}
+	if strings.TrimSpace(work.Agent.Instructions) != "" {
+		fmt.Fprintf(&b, "\nAgent instructions:\n%s\n", work.Agent.Instructions)
+	}
 	if work.PriorSessionID != "" {
 		fmt.Fprintf(&b, "Prior session id: %s\n", work.PriorSessionID)
 	}

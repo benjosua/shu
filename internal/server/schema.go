@@ -1,3 +1,3 @@
 package server
 
-const schema = schemaBase + schemaProduct + schemaCore
+const schema = schemaBase + schemaProduct + schemaCore + schemaConnected

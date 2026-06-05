@@ -3,7 +3,6 @@ package daemon
 import (
 	"bufio"
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"shu/internal/apiclient"
@@ -15,7 +14,7 @@ func runOneWork(ctx context.Context, exe, provider string, work ClaimedWork) {
 	_, _ = apiclient.Request("POST", "/api/daemon/work/"+work.ID+"/start", map[string]string{"executor_id": work.ExecutorID})
 	env, err := prepareWorkEnv(work, provider)
 	if err != nil {
-		fail(work.ID, work.ExecutorID, err, "", "", "agent_error")
+		fail(work.ID, work.ExecutorID, err, "", "")
 		return
 	}
 	prompt := buildWorkPrompt(work)
@@ -44,12 +43,12 @@ func runOneWork(ctx context.Context, exe, provider string, work ClaimedWork) {
 	cmd.Stdin = strings.NewReader(prompt)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		fail(work.ID, work.ExecutorID, err, "", env.WorkDir, "agent_error")
+		fail(work.ID, work.ExecutorID, err, "", env.WorkDir)
 		return
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		fail(work.ID, work.ExecutorID, err, "", env.WorkDir, "agent_error")
+		fail(work.ID, work.ExecutorID, err, "", env.WorkDir)
 		return
 	}
 	var buf strings.Builder
@@ -69,7 +68,7 @@ func runOneWork(ctx context.Context, exe, provider string, work ClaimedWork) {
 	default:
 	}
 	if err != nil {
-		fail(work.ID, work.ExecutorID, err, "", env.WorkDir, classifyFailure(err))
+		fail(work.ID, work.ExecutorID, err, "", env.WorkDir)
 		return
 	}
 	result := buf.String()
@@ -77,23 +76,6 @@ func runOneWork(ctx context.Context, exe, provider string, work ClaimedWork) {
 	_, _ = apiclient.Request("POST", "/api/daemon/work/"+work.ID+"/complete", map[string]string{"result": result, "workDir": env.WorkDir, "work_dir": env.WorkDir, "executor_id": work.ExecutorID})
 }
 
-func fail(id, executorID string, err error, sessionID, workDir, reason string) {
-	_, _ = apiclient.Request("POST", "/api/daemon/work/"+id+"/fail", map[string]string{"error": err.Error(), "session_id": sessionID, "work_dir": workDir, "failure_reason": reason, "executor_id": executorID})
-}
-
-func classifyFailure(err error) string {
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") {
-		return "rate_limit"
-	}
-	if strings.Contains(msg, "quota") || strings.Contains(msg, "credit") {
-		return "quota"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "cancelled"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	return "agent_error"
+func fail(id, executorID string, err error, sessionID, workDir string) {
+	_, _ = apiclient.Request("POST", "/api/daemon/work/"+id+"/fail", map[string]string{"error": err.Error(), "session_id": sessionID, "work_dir": workDir, "executor_id": executorID})
 }

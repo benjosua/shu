@@ -1,6 +1,6 @@
 # shu
 
-Shu is an API-first control plane for agentic work. The server owns identity, policy, scheduling, and durable state. Executors run outside the control plane, register their capabilities, claim scoped work, and return artifacts through the API.
+Shu is an API-first control plane for agentic work. The server owns identity, policy, scheduling, and durable state. Executors run outside the control plane, register providers, claim scoped work, and return artifacts through the API.
 
 ## Design goals
 

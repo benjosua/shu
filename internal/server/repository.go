@@ -97,8 +97,8 @@ func (a *App) withWorkspaceRole(min Role, next http.HandlerFunc) http.HandlerFun
 
 func (a *App) objectWorkspace(ctx context.Context, table, id string) (string, error) {
 	allowed := map[string]bool{
-		"labels": true, "skills": true, "squads": true, "autopilots": true,
-		"chat_sessions": true, "inbox_items": true,
+		"labels": true, "skills": true, "squads": true, "autopilots": true, "resources": true, "runs": true,
+		"chat_sessions": true, "inbox_items": true, "items": true, "external_actions": true,
 	}
 	if !allowed[table] {
 		return "", errors.New("invalid table")

@@ -161,15 +161,6 @@ func Run(args []string) error {
 	case "autopilot run":
 		need(args, 3)
 		return printReq("POST", "/api/autopilots/"+args[2]+"/run", nil)
-	case "tab open":
-		need(args, 3)
-		title := args[2]
-		if len(args) > 3 {
-			title = args[3]
-		}
-		return printReq("POST", "/api/tabs", map[string]string{"route": args[2], "title": title})
-	case "tab list":
-		return printReq("GET", "/api/tabs", nil)
 	default:
 		usage()
 		return nil
@@ -184,21 +175,6 @@ func need(args []string, n int) {
 		usage()
 		os.Exit(2)
 	}
-}
-
-func toInt64(v any) int64 {
-	switch x := v.(type) {
-	case float64:
-		return int64(x)
-	case int64:
-		return x
-	case int:
-		return int64(x)
-	case string:
-		n, _ := strconv.ParseInt(x, 10, 64)
-		return n
-	}
-	return 0
 }
 
 func uploadAttachment(args []string) error {
@@ -253,17 +229,17 @@ func watchEvents() error {
 }
 func watchWork(id string) error {
 	go watchEvents()
-	seen := int64(0)
+	seen := map[string]bool{}
 	for {
 		b, err := apiclient.Request("GET", "/api/work/"+id+"/artifacts", nil)
 		if err == nil {
 			var arr []map[string]any
 			_ = json.Unmarshal(b, &arr)
 			for _, e := range arr {
-				n := toInt64(e["id"])
-				if n > seen {
-					seen = n
-					fmt.Printf("[%s] %v\n", e["type"], e["payload"])
+				artifactID, _ := e["id"].(string)
+				if artifactID != "" && !seen[artifactID] {
+					seen[artifactID] = true
+					fmt.Printf("[%s] %v\n", e["type"], e["data"])
 				}
 			}
 		}

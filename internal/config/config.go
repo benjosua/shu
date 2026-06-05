@@ -11,6 +11,7 @@ type Config struct {
 	DatabaseURL     string
 	RedisURL        string
 	Token           string
+	SecretKey       string
 	UploadRoot      string
 	RepoCacheRoot   string
 	WorkRoot        string
@@ -26,6 +27,7 @@ func Load() Config {
 		DatabaseURL:     getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/shu?sslmode=disable"),
 		RedisURL:        getenv("REDIS_URL", ""),
 		Token:           getenv("SHU_TOKEN", ""),
+		SecretKey:       getenv("SHU_SECRET_KEY", getenv("SHU_TOKEN", "dev-insecure-shu-secret")),
 		UploadRoot:      getenv("SHU_UPLOAD_ROOT", home+"/.shu/uploads"),
 		RepoCacheRoot:   getenv("SHU_REPO_CACHE", home+"/.shu/repo-cache"),
 		WorkRoot:        getenv("SHU_WORK_ROOT", home+"/.shu/work"),

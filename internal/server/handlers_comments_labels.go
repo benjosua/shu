@@ -117,7 +117,7 @@ func (a *App) listIssueLabels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `select l.id::text,l.name,l.color,l.description from issue_labels il join labels l on l.id=il.label_id where il.issue_id=$1 order by l.name`, r.PathValue("id"))
+	rows, err := a.db.Query(r.Context(), `select l.id::text,l.name,l.color,l.description from object_links ol join labels l on l.id=ol.target_id where ol.workspace_id=$1 and ol.source_type='issue' and ol.source_id=$2 and ol.relation='label' and ol.target_type='label' order by l.name`, issueWS, r.PathValue("id"))
 	writeRows(w, rows, err, "id", "name", "color", "description")
 }
 
@@ -136,7 +136,7 @@ func (a *App) attachIssueLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	_, err = a.db.Exec(r.Context(), `insert into issue_labels(issue_id,label_id) values($1,$2) on conflict do nothing`, r.PathValue("id"), in.LabelID)
+	_, err = a.db.Exec(r.Context(), `insert into object_links(workspace_id,source_type,source_id,relation,target_type,target_id) values($1,'issue',$2,'label','label',$3) on conflict do nothing`, issueWS, r.PathValue("id"), in.LabelID)
 	if err != nil {
 		writeError(w, r, 500, err.Error())
 		return
@@ -150,82 +150,7 @@ func (a *App) detachIssueLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	_, err = a.db.Exec(r.Context(), `delete from issue_labels where issue_id=$1 and label_id=$2`, r.PathValue("id"), r.PathValue("labelId"))
-	if err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"deleted": true})
-}
-
-func (a *App) listIssueSubscribers(w http.ResponseWriter, r *http.Request) {
-	issueWS, err := a.issueWorkspace(r.Context(), r.PathValue("id"))
-	if err != nil || a.requireWorkspaceRole(r, issueWS, RoleMember) != nil {
-		writeError(w, r, 403, "forbidden")
-		return
-	}
-	rows, err := a.db.Query(r.Context(), `select subscriber_type,subscriber_id::text,created_at from issue_subscribers where issue_id=$1 order by created_at`, r.PathValue("id"))
-	writeRows(w, rows, err, "type", "id", "created_at")
-}
-
-func (a *App) subscribeIssue(w http.ResponseWriter, r *http.Request) {
-	issueWS, err := a.issueWorkspace(r.Context(), r.PathValue("id"))
-	if err != nil || a.requireWorkspaceRole(r, issueWS, RoleMember) != nil {
-		writeError(w, r, 403, "forbidden")
-		return
-	}
-	uid := currentUserID(r)
-	_, err = a.db.Exec(r.Context(), `insert into issue_subscribers(issue_id,subscriber_type,subscriber_id) values($1,'user',$2) on conflict do nothing`, r.PathValue("id"), uid)
-	if err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"subscribed": true})
-}
-
-func (a *App) unsubscribeIssue(w http.ResponseWriter, r *http.Request) {
-	issueWS, err := a.issueWorkspace(r.Context(), r.PathValue("id"))
-	if err != nil || a.requireWorkspaceRole(r, issueWS, RoleMember) != nil {
-		writeError(w, r, 403, "forbidden")
-		return
-	}
-	uid := currentUserID(r)
-	_, err = a.db.Exec(r.Context(), `delete from issue_subscribers where issue_id=$1 and subscriber_type='user' and subscriber_id=$2`, r.PathValue("id"), uid)
-	if err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"subscribed": false})
-}
-
-func (a *App) addIssueReaction(w http.ResponseWriter, r *http.Request) {
-	issueWS, err := a.issueWorkspace(r.Context(), r.PathValue("id"))
-	if err != nil || a.requireWorkspaceRole(r, issueWS, RoleMember) != nil {
-		writeError(w, r, 403, "forbidden")
-		return
-	}
-	var in struct{ Emoji string }
-	if !readJSON(w, r, &in) {
-		return
-	}
-	uid := currentUserID(r)
-	_, err = a.db.Exec(r.Context(), `insert into issue_reactions(issue_id,actor_type,actor_id,emoji) values($1,'user',$2,$3) on conflict do nothing`, r.PathValue("id"), uid, in.Emoji)
-	if err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-func (a *App) removeIssueReaction(w http.ResponseWriter, r *http.Request) {
-	issueWS, err := a.issueWorkspace(r.Context(), r.PathValue("id"))
-	if err != nil || a.requireWorkspaceRole(r, issueWS, RoleMember) != nil {
-		writeError(w, r, 403, "forbidden")
-		return
-	}
-	emoji := r.URL.Query().Get("emoji")
-	uid := currentUserID(r)
-	_, err = a.db.Exec(r.Context(), `delete from issue_reactions where issue_id=$1 and actor_type='user' and actor_id=$2 and emoji=$3`, r.PathValue("id"), uid, emoji)
+	_, err = a.db.Exec(r.Context(), `delete from object_links where workspace_id=$1 and source_type='issue' and source_id=$2 and relation='label' and target_type='label' and target_id=$3`, issueWS, r.PathValue("id"), r.PathValue("labelId"))
 	if err != nil {
 		writeError(w, r, 500, err.Error())
 		return

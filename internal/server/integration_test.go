@@ -25,13 +25,22 @@ func TestIntegrationMigrationsApply(t *testing.T) {
 	if err := runMigrations(ctx, db, "migrations"); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"workspace_members", "personal_access_tokens", "issues", "comments", "attachments", "work_items", "artifacts"} {
+	for _, table := range []string{"workspace_members", "personal_access_tokens", "issues", "comments", "attachments", "work_items", "artifacts", "resource_secrets", "items", "external_actions", "external_sync_runs", "runs", "activity_events", "object_links"} {
 		var exists bool
 		if err := db.QueryRow(ctx, `select exists(select 1 from information_schema.tables where table_schema=current_schema() and table_name=$1)`, table).Scan(&exists); err != nil {
 			t.Fatal(err)
 		}
 		if !exists {
 			t.Fatalf("table %s missing", table)
+		}
+	}
+	for _, view := range []string{"todos", "emails", "calendar_events"} {
+		var exists bool
+		if err := db.QueryRow(ctx, `select exists(select 1 from information_schema.views where table_schema=current_schema() and table_name=$1)`, view).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatalf("view %s missing", view)
 		}
 	}
 }

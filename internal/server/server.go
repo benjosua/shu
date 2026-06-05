@@ -41,7 +41,7 @@ func Run() error {
 	app.routes(mux)
 	srv := &http.Server{Addr: app.addr, Handler: logReq(mux)}
 	go app.sweeper(ctx)
-	go app.autopilotScheduler(ctx)
+	go app.scheduler(ctx)
 	go func() {
 		log.Printf("server on %s", app.addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

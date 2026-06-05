@@ -62,7 +62,6 @@ create table if not exists issues (
   assignee_type text not null default '',
   assignee_id uuid,
   parent_issue_id uuid references issues(id) on delete set null,
-  due_date timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -98,8 +97,6 @@ create index if not exists idx_attachments_comment on attachments(comment_id, cr
 create table if not exists inbox_items (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
-  recipient_type text not null default 'user',
-  recipient_id uuid,
   type text not null,
   severity text not null default 'info',
   title text not null,
@@ -131,9 +128,6 @@ create table if not exists autopilots (
   prompt text not null,
   assignee_type text not null default 'agent',
   assignee_id uuid not null,
-  trigger_type text not null default 'manual',
-  cron_interval_seconds int,
-  next_run_at timestamptz,
   enabled boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -145,15 +139,5 @@ create table if not exists autopilot_runs (
   trigger_payload jsonb not null default '{}',
   started_at timestamptz not null default now(),
   completed_at timestamptz
-);
-
-create table if not exists workspace_tabs (
-  id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-  title text not null,
-  route text not null,
-  active boolean not null default false,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
 );
 `

@@ -25,19 +25,3 @@ func (a *App) updateMe(w http.ResponseWriter, r *http.Request) {
 func (a *App) getConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"name": "shu", "api_first": true, "executor_modes": []string{"local", "cloud"}})
 }
-
-func (a *App) createFeedback(w http.ResponseWriter, r *http.Request) {
-	ws, _ := a.wsID(r)
-	uid := currentUserID(r)
-	var in struct {
-		Kind, Body string
-		Metadata   map[string]any
-	}
-	if !readJSON(w, r, &in) {
-		return
-	}
-	if in.Kind == "" {
-		in.Kind = "feedback"
-	}
-	writeRow(w, a.db.QueryRow(r.Context(), `insert into feedback(workspace_id,user_id,kind,body,metadata) values($1,$2,$3,$4,$5) returning id::text,kind,created_at`, nullUUID(ws), nullUUID(uid), in.Kind, in.Body, mustJSON(in.Metadata)), "id", "kind", "created_at")
-}

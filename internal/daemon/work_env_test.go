@@ -22,9 +22,9 @@ func TestBuildWorkPromptIncludesStepAndResource(t *testing.T) {
 		Body:             "Patch it",
 		StepInstructions: "Review before final",
 		Resource:         WorkResource{Kind: "github_repo", Locator: "https://example/repo.git"},
-		Agent:            ClaimedAgent{Name: "dev"},
+		Agent:            ClaimedAgent{Name: "dev", Instructions: "Use tests first"},
 	})
-	for _, want := range []string{"Fix bug", "Patch it", "Review before final", "github_repo", "dev"} {
+	for _, want := range []string{"Fix bug", "Patch it", "Review before final", "github_repo", "dev", "Use tests first"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

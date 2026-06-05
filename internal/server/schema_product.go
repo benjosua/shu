@@ -13,16 +13,10 @@ alter table workspaces add column if not exists issue_prefix text not null defau
 alter table agents add column if not exists description text not null default '';
 alter table agents add column if not exists avatar_url text not null default '';
 alter table agents add column if not exists archived boolean not null default false;
-alter table agents add column if not exists visibility text not null default 'workspace';
-alter table agents add column if not exists mcp_config jsonb not null default '{}';
-alter table agents add column if not exists concurrency int not null default 1;
 
-alter table issues add column if not exists number bigserial;
 alter table issues add column if not exists origin text not null default '';
-alter table issues add column if not exists first_executed_at timestamptz;
 create index if not exists idx_issues_search on issues using gin(to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(description,'')));
 
-alter table comments add column if not exists parent_id uuid references comments(id) on delete cascade;
 alter table comments add column if not exists resolved_at timestamptz;
 
 create table if not exists labels (
@@ -35,60 +29,27 @@ create table if not exists labels (
   updated_at timestamptz not null default now(),
   unique(workspace_id, name)
 );
-create table if not exists issue_labels (
-  issue_id uuid not null references issues(id) on delete cascade,
-  label_id uuid not null references labels(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key(issue_id,label_id)
-);
-create table if not exists issue_subscribers (
-  issue_id uuid not null references issues(id) on delete cascade,
-  subscriber_type text not null,
-  subscriber_id uuid not null,
-  created_at timestamptz not null default now(),
-  primary key(issue_id,subscriber_type,subscriber_id)
-);
-create table if not exists issue_reactions (
-  issue_id uuid not null references issues(id) on delete cascade,
-  actor_type text not null,
-  actor_id uuid not null,
-  emoji text not null,
-  created_at timestamptz not null default now(),
-  primary key(issue_id,actor_type,actor_id,emoji)
-);
-create table if not exists comment_reactions (
-  comment_id uuid not null references comments(id) on delete cascade,
-  actor_type text not null,
-  actor_id uuid not null,
-  emoji text not null,
-  created_at timestamptz not null default now(),
-  primary key(comment_id,actor_type,actor_id,emoji)
-);
 
-create table if not exists notification_preferences (
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-  user_id uuid not null references users(id) on delete cascade,
-  preferences jsonb not null default '{}',
-  updated_at timestamptz not null default now(),
-  primary key(workspace_id,user_id)
-);
-
-create table if not exists pinned_items (
+create table if not exists object_links (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
-  item_type text not null,
-  item_id uuid not null,
-  sort_order int not null default 0,
+  source_type text not null,
+  source_id uuid not null,
+  relation text not null,
+  target_type text not null,
+  target_id uuid not null,
+  metadata jsonb not null default '{}',
   created_at timestamptz not null default now(),
-  unique(workspace_id,item_type,item_id)
+  unique(workspace_id,source_type,source_id,relation,target_type,target_id)
 );
+create index if not exists idx_object_links_source on object_links(workspace_id,source_type,source_id,relation);
+create index if not exists idx_object_links_target on object_links(workspace_id,target_type,target_id,relation);
 
 create table if not exists chat_sessions (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   title text not null default 'New chat',
   agent_id uuid references agents(id) on delete set null,
-  unread_since timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -98,12 +59,22 @@ create table if not exists chat_messages (
   session_id uuid not null references chat_sessions(id) on delete cascade,
   role text not null,
   content text not null,
-  failure_reason text not null default '',
-  elapsed_ms bigint not null default 0,
   created_at timestamptz not null default now()
 );
-alter table attachments add column if not exists chat_session_id uuid references chat_sessions(id) on delete cascade;
-alter table attachments add column if not exists chat_message_id bigint references chat_messages(id) on delete cascade;
+
+create table if not exists activity_events (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  subject_type text not null default '',
+  subject_id uuid,
+  type text not null,
+  actor_type text not null default '',
+  actor_id uuid,
+  payload jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_activity_workspace on activity_events(workspace_id, created_at desc);
+create index if not exists idx_activity_subject on activity_events(workspace_id, subject_type, subject_id, created_at desc);
 
 create table if not exists autopilot_triggers (
   id uuid primary key default gen_random_uuid(),
@@ -141,17 +112,6 @@ create table if not exists agent_skills (
   created_at timestamptz not null default now(),
   primary key(agent_id,skill_id)
 );
-
-create table if not exists feedback (
-  id uuid primary key default gen_random_uuid(),
-  workspace_id uuid references workspaces(id) on delete cascade,
-  user_id uuid references users(id) on delete set null,
-  kind text not null default 'feedback',
-  body text not null,
-  metadata jsonb not null default '{}',
-  created_at timestamptz not null default now()
-);
-
 alter table squad_members add column if not exists role text not null default 'member';
 alter table squads add column if not exists avatar_url text not null default '';
 alter table squads add column if not exists instructions text not null default '';

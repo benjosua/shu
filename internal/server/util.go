@@ -3,13 +3,11 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"shu/internal/config"
 	"strconv"
 
@@ -27,6 +25,8 @@ func InitUser(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer db.Close()
+
 	if _, err := db.Exec(ctx, schema); err != nil {
 		return err
 	}
@@ -43,13 +43,6 @@ func InitUser(args []string) error {
 	return nil
 }
 
-// helpers
-func getenv(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
-}
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.Body == nil {
 		return true
@@ -72,72 +65,56 @@ func writeHelperError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 func writeRow(w http.ResponseWriter, row pgx.Row, names ...string) {
-	vals := make([]any, len(names))
-	ptr := make([]any, len(names))
-	for i := range vals {
-		ptr[i] = &vals[i]
-	}
-	if err := row.Scan(ptr...); err != nil {
-		writeHelperError(w, 500, err.Error())
+	m, err := scanNamed(row, names)
+	if err != nil {
+		writeHelperError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	m := map[string]any{}
-	for i, n := range names {
-		m[n] = vals[i]
 	}
 	writeJSON(w, m)
 }
-func writeRowNullable(w http.ResponseWriter, row pgx.Row, names ...string) {
-	vals := make([]any, len(names))
-	ptr := make([]any, len(names))
-	for i := range vals {
-		ptr[i] = &vals[i]
-	}
-	if err := row.Scan(ptr...); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeJSON(w, map[string]any{})
-		} else {
-			writeHelperError(w, 500, err.Error())
-		}
-		return
-	}
-	m := map[string]any{}
-	for i, n := range names {
-		m[n] = vals[i]
-	}
-	writeJSON(w, m)
-}
+
 func writeRows(w http.ResponseWriter, rows pgx.Rows, err error, names ...string) {
 	if err != nil {
-		writeHelperError(w, 500, err.Error())
+		writeHelperError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer rows.Close()
-	var out []map[string]any
+
+	out := []map[string]any{}
 	for rows.Next() {
-		vals := make([]any, len(names))
-		ptr := make([]any, len(names))
-		for i := range vals {
-			ptr[i] = &vals[i]
-		}
-		if err := rows.Scan(ptr...); err != nil {
-			writeHelperError(w, 500, err.Error())
+		m, err := scanNamed(rows, names)
+		if err != nil {
+			writeHelperError(w, http.StatusInternalServerError, err.Error())
 			return
-		}
-		m := map[string]any{}
-		for i, n := range names {
-			m[n] = vals[i]
 		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		writeHelperError(w, 500, err.Error())
+		writeHelperError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if out == nil {
-		out = []map[string]any{}
-	}
 	writeJSON(w, out)
+}
+
+type scanner interface {
+	Scan(...any) error
+}
+
+func scanNamed(s scanner, names []string) (map[string]any, error) {
+	vals := make([]any, len(names))
+	ptrs := make([]any, len(names))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := s.Scan(ptrs...); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]any, len(names))
+	for i, name := range names {
+		out[name] = vals[i]
+	}
+	return out, nil
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 func nullUUID(s string) any {
@@ -161,5 +138,3 @@ func toInt64(v any) int64 {
 	}
 	return 0
 }
-
-var _ = sql.ErrNoRows

@@ -11,7 +11,7 @@ func (a *App) getAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	writeRow(w, a.db.QueryRow(r.Context(), `select id::text,name,provider,description,model,instructions,custom_env,custom_args,avatar_url,archived,visibility,mcp_config,concurrency from agents where id=$1`, r.PathValue("id")), "id", "name", "provider", "description", "model", "instructions", "custom_env", "custom_args", "avatar_url", "archived", "visibility", "mcp_config", "concurrency")
+	writeRow(w, a.db.QueryRow(r.Context(), `select id::text,name,provider,description,model,instructions,custom_env,custom_args,avatar_url,archived from agents where id=$1`, r.PathValue("id")), "id", "name", "provider", "description", "model", "instructions", "custom_env", "custom_args", "avatar_url", "archived")
 }
 
 func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
@@ -21,16 +21,14 @@ func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name, Description, Instructions, Model, AvatarURL, Visibility string
-		CustomEnv                                                     map[string]string
-		CustomArgs                                                    []string
-		MCPConfig                                                     map[string]any
-		Concurrency                                                   int
+		Name, Description, Instructions, Model, AvatarURL string
+		CustomEnv                                         map[string]string
+		CustomArgs                                        []string
 	}
 	if !readJSON(w, r, &in) {
 		return
 	}
-	row := a.db.QueryRow(r.Context(), `update agents set name=coalesce(nullif($2,''),name), description=coalesce(nullif($3,''),description), instructions=coalesce(nullif($4,''),instructions), model=coalesce(nullif($5,''),model), avatar_url=coalesce(nullif($6,''),avatar_url), visibility=coalesce(nullif($7,''),visibility), custom_env=case when $8::jsonb='null'::jsonb then custom_env else $8::jsonb end, custom_args=case when $9::jsonb='null'::jsonb then custom_args else $9::jsonb end, mcp_config=case when $10::jsonb='null'::jsonb then mcp_config else $10::jsonb end, concurrency=case when $11=0 then concurrency else $11 end where id=$1 returning id::text,name,provider`, r.PathValue("id"), in.Name, in.Description, in.Instructions, in.Model, in.AvatarURL, in.Visibility, mustJSON(in.CustomEnv), mustJSON(in.CustomArgs), mustJSON(in.MCPConfig), in.Concurrency)
+	row := a.db.QueryRow(r.Context(), `update agents set name=coalesce(nullif($2,''),name), description=coalesce(nullif($3,''),description), instructions=coalesce(nullif($4,''),instructions), model=coalesce(nullif($5,''),model), avatar_url=coalesce(nullif($6,''),avatar_url), custom_env=case when $7::jsonb='null'::jsonb then custom_env else $7::jsonb end, custom_args=case when $8::jsonb='null'::jsonb then custom_args else $8::jsonb end where id=$1 returning id::text,name,provider`, r.PathValue("id"), in.Name, in.Description, in.Instructions, in.Model, in.AvatarURL, mustJSON(in.CustomEnv), mustJSON(in.CustomArgs))
 	writeRow(w, row, "id", "name", "provider")
 }
 

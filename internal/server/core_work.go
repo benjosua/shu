@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -140,15 +141,45 @@ func (a *App) createWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Kind, Title, Prompt, Provider, ResourceID, ParentID string
-		Priority                                            int
-		Policy                                              map[string]any
+		Kind, Title, Prompt, Provider, Agent, AgentID, ResourceID, ParentID string
+		AgentIDSnake                                                        string `json:"agent_id"`
+		ResourceIDSnake                                                     string `json:"resource_id"`
+		ParentIDSnake                                                       string `json:"parent_id"`
+		Priority                                                            int
+		Policy                                                              map[string]any
 	}
 	if !readJSON(w, r, &in) {
 		return
 	}
 	if in.Kind == "" {
 		in.Kind = "work"
+	}
+	if in.ResourceID == "" {
+		in.ResourceID = in.ResourceIDSnake
+	}
+	if in.ParentID == "" {
+		in.ParentID = in.ParentIDSnake
+	}
+	agentID := in.AgentID
+	if agentID == "" {
+		agentID = in.AgentIDSnake
+	}
+	if agentID == "" {
+		agentID = in.Agent
+	}
+	if agentID != "" {
+		agentID, err = a.resolveAgentID(r.Context(), ws, agentID)
+		if err != nil {
+			writeError(w, r, 400, err.Error())
+			return
+		}
+		if in.Provider == "" {
+			in.Provider, err = a.agentProvider(r.Context(), agentID)
+			if err != nil {
+				writeError(w, r, 500, err.Error())
+				return
+			}
+		}
 	}
 	if in.Provider == "" {
 		in.Provider = "codex"
@@ -158,13 +189,16 @@ func (a *App) createWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 409, err.Error())
 		return
 	}
-	row := a.db.QueryRow(r.Context(), `insert into work_items(workspace_id,kind,parent_id,title,prompt,resource_id,policy,provider,executor_id,priority)
-values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id::text,kind,title,status,executor_id::text,created_at`, ws, in.Kind, nullUUID(in.ParentID), in.Title, in.Prompt, nullUUID(in.ResourceID), mustJSON(in.Policy), in.Provider, executorID, in.Priority)
+	row := a.db.QueryRow(r.Context(), `insert into work_items(workspace_id,kind,parent_id,title,prompt,resource_id,policy,provider,agent_id,executor_id,priority)
+values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id::text,kind,title,status,executor_id::text,created_at`, ws, in.Kind, nullUUID(in.ParentID), in.Title, in.Prompt, nullUUID(in.ResourceID), mustJSON(in.Policy), in.Provider, nullUUID(agentID), executorID, in.Priority)
 	var id, kind, title, status, exID string
 	var created any
 	if err := row.Scan(&id, &kind, &title, &status, &exID, &created); err != nil {
 		writeError(w, r, 500, err.Error())
 		return
+	}
+	if runID, err := a.runStore().Create(r.Context(), ws, "agent.work", WorkQueued, ref(EntityWork, id), map[string]any{"title": title, "kind": kind}); err == nil {
+		_, _ = a.db.Exec(r.Context(), `update work_items set run_id=$2 where id=$1`, id, runID)
 	}
 	a.publish(r.Context(), Event{Type: "work.created", WorkspaceID: ws, ExecutorID: exID, Payload: map[string]string{"work_id": id}, TS: time.Now()})
 	writeJSON(w, map[string]any{"id": id, "kind": kind, "title": title, "status": status, "executor_id": exID, "created_at": created})
@@ -185,7 +219,7 @@ func (a *App) getWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	writeRow(w, a.db.QueryRow(r.Context(), `select id::text,kind,coalesce(parent_id::text,''),title,prompt,provider,status,coalesce(resource_id::text,''),policy,coalesce(executor_id::text,''),result,error,created_at,started_at,completed_at from work_items where id=$1`, r.PathValue("id")), "id", "kind", "parent_id", "title", "prompt", "provider", "status", "resource_id", "policy", "executor_id", "result", "error", "created_at", "started_at", "completed_at")
+	writeRow(w, a.db.QueryRow(r.Context(), `select id::text,kind,coalesce(parent_id::text,''),title,prompt,provider,coalesce(agent_id::text,''),status,coalesce(resource_id::text,''),policy,coalesce(executor_id::text,''),result,error,created_at,started_at,completed_at from work_items where id=$1`, r.PathValue("id")), "id", "kind", "parent_id", "title", "prompt", "provider", "agent_id", "status", "resource_id", "policy", "executor_id", "result", "error", "created_at", "started_at", "completed_at")
 }
 
 func (a *App) claimWork(w http.ResponseWriter, r *http.Request) {
@@ -197,18 +231,24 @@ func (a *App) claimWork(w http.ResponseWriter, r *http.Request) {
 	}
 	row := a.db.QueryRow(r.Context(), `
 with claimed as (
-  update work_items set status='dispatched', dispatched_at=now()
+  update work_items set status=$2, dispatched_at=now()
   where id=(
-    select id from work_items where status='queued' and executor_id=$1 order by priority desc, created_at asc for update skip locked limit 1
+    select id from work_items where status=$3 and executor_id=$1 order by priority desc, created_at asc for update skip locked limit 1
   ) returning *
 )
-select c.id::text,c.workspace_id::text,c.title,c.prompt,c.provider,c.executor_id::text,e.mode,coalesce(r.kind,''),coalesce(r.locator,''),c.policy
+select c.id::text,c.workspace_id::text,c.title,c.prompt,c.provider,c.executor_id::text,e.mode,
+       coalesce(r.kind,''),coalesce(r.locator,''),
+       coalesce(c.agent_id::text,''),coalesce(a.name,c.provider),coalesce(a.provider,c.provider),
+       coalesce(a.instructions,''),coalesce(a.model,''),coalesce(a.custom_env,'{}'::jsonb),coalesce(a.custom_args,'[]'::jsonb),
+       c.policy
 from claimed c
 join executors e on e.id=c.executor_id
-left join resources r on r.id=c.resource_id`, executorID)
+left join resources r on r.id=c.resource_id
+left join agents a on a.id=c.agent_id`, executorID, WorkDispatched, WorkQueued)
 	var id, workWS, title, prompt, provider, exID, mode, resourceKind, resourceLocator string
-	var policy []byte
-	if err := row.Scan(&id, &workWS, &title, &prompt, &provider, &exID, &mode, &resourceKind, &resourceLocator, &policy); err != nil {
+	var agentID, agentName, agentProvider, agentInstructions, agentModel string
+	var agentEnv, agentArgs, policy []byte
+	if err := row.Scan(&id, &workWS, &title, &prompt, &provider, &exID, &mode, &resourceKind, &resourceLocator, &agentID, &agentName, &agentProvider, &agentInstructions, &agentModel, &agentEnv, &agentArgs, &policy); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSON(w, map[string]any{})
 			return
@@ -216,13 +256,72 @@ left join resources r on r.id=c.resource_id`, executorID)
 		writeError(w, r, 500, err.Error())
 		return
 	}
+	if agentID != "" {
+		agentInstructions = a.agentInstructionsWithSkills(r.Context(), agentID, agentInstructions)
+	}
+	var customEnv map[string]string
+	var customArgs []string
+	_ = json.Unmarshal(agentEnv, &customEnv)
+	_ = json.Unmarshal(agentArgs, &customArgs)
+	if customEnv == nil {
+		customEnv = map[string]string{}
+	}
+	if customArgs == nil {
+		customArgs = []string{}
+	}
 	writeJSON(w, map[string]any{
 		"id": id, "workspace_id": workWS, "title": title, "body": prompt,
-		"agent_id": exID, "executor_id": exID, "executor_mode": mode,
+		"agent_id": agentID, "executor_id": exID, "executor_mode": mode,
 		"resource": map[string]string{"kind": resourceKind, "locator": resourceLocator},
 		"policy":   json.RawMessage(policy),
-		"agent":    map[string]any{"id": exID, "name": provider, "provider": provider, "instructions": "", "model": "", "custom_env": map[string]string{}, "custom_args": []string{}},
+		"agent":    map[string]any{"id": agentID, "name": agentName, "provider": agentProvider, "instructions": agentInstructions, "model": agentModel, "custom_env": customEnv, "custom_args": customArgs},
 	})
+}
+
+func (a *App) agentInstructionsWithSkills(ctx context.Context, agentID, base string) string {
+	rows, err := a.db.Query(ctx, `select s.id::text,s.name,s.description,s.content from agent_skills ag join skills s on s.id=ag.skill_id where ag.agent_id=$1 order by s.name`, agentID)
+	if err != nil {
+		return base
+	}
+	defer rows.Close()
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(base))
+	for rows.Next() {
+		var id, name, desc, content string
+		if err := rows.Scan(&id, &name, &desc, &content); err != nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## Skill: ")
+		b.WriteString(name)
+		b.WriteString("\n")
+		if strings.TrimSpace(desc) != "" {
+			b.WriteString(strings.TrimSpace(desc))
+			b.WriteString("\n")
+		}
+		if strings.TrimSpace(content) != "" {
+			b.WriteString(strings.TrimSpace(content))
+			b.WriteString("\n")
+		}
+		fileRows, err := a.db.Query(ctx, `select path,content from skill_files where skill_id=$1 order by path`, id)
+		if err != nil {
+			continue
+		}
+		for fileRows.Next() {
+			var path, fileContent string
+			if err := fileRows.Scan(&path, &fileContent); err == nil && strings.TrimSpace(fileContent) != "" {
+				b.WriteString("\n### ")
+				b.WriteString(path)
+				b.WriteString("\n")
+				b.WriteString(strings.TrimSpace(fileContent))
+				b.WriteString("\n")
+			}
+		}
+		fileRows.Close()
+	}
+	return b.String()
 }
 
 func (a *App) startWork(w http.ResponseWriter, r *http.Request) {
@@ -238,12 +337,14 @@ func (a *App) startWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	if err := a.db.QueryRow(r.Context(), `update work_items set status='running', started_at=now() where id=$1 and executor_id=$2 and status='dispatched' returning workspace_id::text`, id, in.ExecutorID).Scan(&ws); err != nil {
+	var runID string
+	if err := a.db.QueryRow(r.Context(), `update work_items set status=$3, started_at=now() where id=$1 and executor_id=$2 and status=$4 returning workspace_id::text,coalesce(run_id::text,'')`, id, in.ExecutorID, WorkRunning, WorkDispatched).Scan(&ws, &runID); err != nil {
 		writeError(w, r, 409, err.Error())
 		return
 	}
+	a.runStore().Start(r.Context(), runID)
 	a.publish(r.Context(), Event{Type: "work.running", WorkspaceID: ws, Payload: map[string]string{"work_id": id}, TS: time.Now()})
-	writeJSON(w, map[string]string{"status": "running"})
+	writeJSON(w, map[string]string{"status": WorkRunning})
 }
 
 func (a *App) addArtifact(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +366,8 @@ func (a *App) addArtifact(w http.ResponseWriter, r *http.Request) {
 		in.Type = "log"
 	}
 	row := a.db.QueryRow(r.Context(), `insert into artifacts(workspace_id,work_id,type,data) values($1,$2,$3,$4) returning id::text,type,created_at`, ws, id, in.Type, mustJSON(in.Data))
+	a.postProcessExternalArtifact(r.Context(), ws, id, in.Type, in.Data)
+	a.activityStore().Record(r.Context(), ws, ref(EntityWork, id), "artifact.created", EntityRef{}, map[string]any{"type": in.Type})
 	writeRow(w, row, "id", "type", "created_at")
 }
 
@@ -284,9 +387,9 @@ func (a *App) finishWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 400, "invalid finish route")
 		return
 	}
-	dbStatus := "completed"
+	dbStatus := WorkCompleted
 	if status == "fail" {
-		dbStatus = "failed"
+		dbStatus = WorkFailed
 	}
 	var in struct {
 		Result, Error string
@@ -300,10 +403,18 @@ func (a *App) finishWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 403, "forbidden")
 		return
 	}
-	if err := a.db.QueryRow(r.Context(), `update work_items set status=$2,result=$3,error=$4,completed_at=now() where id=$1 and executor_id=$5 and status in ('dispatched','running') returning workspace_id::text`, id, dbStatus, in.Result, in.Error, in.ExecutorID).Scan(&ws); err != nil {
+	var runID string
+	if err := a.db.QueryRow(r.Context(), `update work_items set status=$2,result=$3,error=$4,completed_at=now() where id=$1 and executor_id=$5 and status in ($6,$7) returning workspace_id::text,coalesce(run_id::text,'')`, id, dbStatus, in.Result, in.Error, in.ExecutorID, WorkDispatched, WorkRunning).Scan(&ws, &runID); err != nil {
 		writeError(w, r, 409, err.Error())
 		return
 	}
+	if dbStatus == WorkCompleted {
+		_, _ = a.db.Exec(r.Context(), `update issues set status=$2, updated_at=now() where id=(select (policy->>'issue_id')::uuid from work_items where id=$1 and kind='issue' and policy ? 'issue_id')`, id, IssueDone)
+	} else {
+		_, _ = a.db.Exec(r.Context(), `update issues set status=$2, updated_at=now() where id=(select (policy->>'issue_id')::uuid from work_items where id=$1 and kind='issue' and policy ? 'issue_id')`, id, IssueTodo)
+	}
+	a.runStore().Finish(r.Context(), runID, dbStatus, map[string]any{"result": in.Result}, in.Error)
+	_, _ = a.db.Exec(r.Context(), `update autopilot_runs set status=$2, completed_at=now() where work_id=$1`, id, dbStatus)
 	a.publish(r.Context(), Event{Type: "work." + dbStatus, WorkspaceID: ws, Payload: map[string]string{"work_id": id}, TS: time.Now()})
 	writeJSON(w, map[string]string{"status": dbStatus})
 }
