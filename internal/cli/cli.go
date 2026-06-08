@@ -72,6 +72,9 @@ func Run(args []string) error {
 	case "work artifacts":
 		need(args, 3)
 		return printReq("GET", "/api/work/"+args[2]+"/artifacts", nil)
+	case "work cancel":
+		need(args, 3)
+		return printReq("POST", "/api/work/"+args[2]+"/cancel", nil)
 	case "work watch":
 		need(args, 3)
 		return watchWork(args[2])

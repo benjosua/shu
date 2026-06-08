@@ -57,7 +57,7 @@ CLI:
   shu resource create <kind> <locator>
   shu resource list
   shu work create <title> [--prompt text] [--resource id] [--provider codex]
-  shu work list|get <id>|artifacts <id>|watch <id>
+  shu work list|get <id>|artifacts <id>|cancel <id>|watch <id>
   shu agent create <name> <provider>
   shu agent list
   shu issue create <title> [--description text] [--assignee agent] [--priority p]

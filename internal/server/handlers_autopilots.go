@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"time"
 )
 
 func (a *App) createAutopilot(w http.ResponseWriter, r *http.Request) {
@@ -81,24 +80,22 @@ func (a *App) enqueueAutopilot(ctx context.Context, id string, payload map[strin
 	if err != nil {
 		return "", err
 	}
-	executorID, err := a.pickExecutor(ctx, ws, provider, "")
+	work, err := a.workService().Enqueue(ctx, WorkSpec{
+		WorkspaceID: ws,
+		Kind:        "autopilot",
+		Title:       "Autopilot: " + id,
+		Prompt:      prompt,
+		Provider:    provider,
+		AgentID:     agentID,
+		RunKind:     "agent.autopilot",
+		RunInput:    map[string]any{"autopilot_id": id, "payload": payload},
+	})
 	if err != nil {
 		return "", err
 	}
-	var workID string
-	err = a.db.QueryRow(ctx, `insert into work_items(workspace_id,kind,title,prompt,provider,agent_id,executor_id)
-values($1,'autopilot',$2,$3,$4,$5,$6) returning id::text`, ws, "Autopilot: "+id, prompt, provider, nullUUID(agentID), executorID).Scan(&workID)
-	if err != nil {
+	if _, err := a.db.Exec(ctx, `insert into autopilot_runs(autopilot_id,workspace_id,status,work_id,run_id,trigger_payload) values($1,$2,$3,$4,$5,$6)`, id, ws, WorkQueued, work.WorkID, nullUUID(work.RunID), mustJSON(payload)); err != nil {
 		return "", err
 	}
-	runID := ""
-	if rid, err := a.runStore().Create(ctx, ws, "agent.autopilot", WorkQueued, ref(EntityWork, workID), map[string]any{"autopilot_id": id, "payload": payload}); err == nil {
-		runID = rid
-		_, _ = a.db.Exec(ctx, `update work_items set run_id=$2 where id=$1`, workID, rid)
-	}
-	if _, err := a.db.Exec(ctx, `insert into autopilot_runs(autopilot_id,workspace_id,status,work_id,run_id,trigger_payload) values($1,$2,$3,$4,$5,$6)`, id, ws, WorkQueued, workID, nullUUID(runID), mustJSON(payload)); err != nil {
-		return "", err
-	}
-	a.publish(ctx, Event{Type: "work.created", WorkspaceID: ws, ExecutorID: executorID, Payload: map[string]string{"work_id": workID}, TS: time.Now()})
-	return workID, nil
+	a.publishWorkCreated(ctx, ws, work, nil)
+	return work.WorkID, nil
 }

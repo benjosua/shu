@@ -181,27 +181,26 @@ func (a *App) createWork(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if in.Provider == "" {
-		in.Provider = "codex"
-	}
-	executorID, err := a.pickExecutor(r.Context(), ws, in.Provider, in.ResourceID)
+	work, err := a.workService().Enqueue(r.Context(), WorkSpec{
+		WorkspaceID: ws,
+		Kind:        in.Kind,
+		Title:       in.Title,
+		Prompt:      in.Prompt,
+		Provider:    in.Provider,
+		AgentID:     agentID,
+		ResourceID:  in.ResourceID,
+		ParentID:    in.ParentID,
+		Priority:    in.Priority,
+		Policy:      in.Policy,
+		RunKind:     "agent.work",
+		RunInput:    map[string]any{"title": in.Title, "kind": in.Kind},
+	})
 	if err != nil {
 		writeError(w, r, 409, err.Error())
 		return
 	}
-	row := a.db.QueryRow(r.Context(), `insert into work_items(workspace_id,kind,parent_id,title,prompt,resource_id,policy,provider,agent_id,executor_id,priority)
-values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id::text,kind,title,status,executor_id::text,created_at`, ws, in.Kind, nullUUID(in.ParentID), in.Title, in.Prompt, nullUUID(in.ResourceID), mustJSON(in.Policy), in.Provider, nullUUID(agentID), executorID, in.Priority)
-	var id, kind, title, status, exID string
-	var created any
-	if err := row.Scan(&id, &kind, &title, &status, &exID, &created); err != nil {
-		writeError(w, r, 500, err.Error())
-		return
-	}
-	if runID, err := a.runStore().Create(r.Context(), ws, "agent.work", WorkQueued, ref(EntityWork, id), map[string]any{"title": title, "kind": kind}); err == nil {
-		_, _ = a.db.Exec(r.Context(), `update work_items set run_id=$2 where id=$1`, id, runID)
-	}
-	a.publish(r.Context(), Event{Type: "work.created", WorkspaceID: ws, ExecutorID: exID, Payload: map[string]string{"work_id": id}, TS: time.Now()})
-	writeJSON(w, map[string]any{"id": id, "kind": kind, "title": title, "status": status, "executor_id": exID, "created_at": created})
+	a.publishWorkCreated(r.Context(), ws, work, nil)
+	writeJSON(w, map[string]any{"id": work.WorkID, "kind": work.Kind, "title": work.Title, "status": work.Status, "executor_id": work.ExecutorID, "created_at": work.CreatedAt})
 }
 
 func (a *App) listWork(w http.ResponseWriter, r *http.Request) {
@@ -428,4 +427,23 @@ func (a *App) workStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeRow(w, a.db.QueryRow(r.Context(), `select status from work_items where id=$1 and executor_id=$2`, id, executorID), "status")
+}
+
+func (a *App) cancelWork(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ws, err := a.workWorkspace(r.Context(), id)
+	if err != nil || a.requireWorkspaceRole(r, ws, RoleMember) != nil {
+		writeError(w, r, 403, "forbidden")
+		return
+	}
+	var runID string
+	if err := a.db.QueryRow(r.Context(), `update work_items set status=$2,error=case when error='' then 'cancelled by user' else error end,completed_at=now() where id=$1 and status in ($3,$4,$5) returning coalesce(run_id::text,'')`, id, WorkCancelled, WorkQueued, WorkDispatched, WorkRunning).Scan(&runID); err != nil {
+		writeError(w, r, 409, err.Error())
+		return
+	}
+	a.runStore().Finish(r.Context(), runID, WorkCancelled, nil, "cancelled by user")
+	_, _ = a.db.Exec(r.Context(), `update autopilot_runs set status=$2, completed_at=now() where work_id=$1`, id, WorkCancelled)
+	_, _ = a.db.Exec(r.Context(), `update issues set status=$2, updated_at=now() where id=(select (policy->>'issue_id')::uuid from work_items where id=$1 and kind='issue' and policy ? 'issue_id')`, id, IssueTodo)
+	a.publish(r.Context(), Event{Type: "work.cancelled", WorkspaceID: ws, Payload: map[string]string{"work_id": id}, TS: time.Now()})
+	writeJSON(w, map[string]string{"status": WorkCancelled})
 }

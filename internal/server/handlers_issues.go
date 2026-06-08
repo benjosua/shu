@@ -1,9 +1,6 @@
 package server
 
-import (
-	"net/http"
-	"time"
-)
+import "net/http"
 
 func (a *App) createIssue(w http.ResponseWriter, r *http.Request) {
 	ws, err := a.wsID(r)
@@ -26,7 +23,7 @@ func (a *App) createIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	workPrompt := in.Description
 	assignee := EntityRef{}
-	var provider, agentID, executorID string
+	var provider, agentID string
 	if in.Assignee != "" {
 		assignee, err = a.resolveAssigneeForResource(r.Context(), ws, in.Assignee, "")
 		if err != nil {
@@ -37,11 +34,6 @@ func (a *App) createIssue(w http.ResponseWriter, r *http.Request) {
 		agentID, provider, workPrompt, err = a.workProfileForAssignee(r.Context(), assignee, workPrompt)
 		if err != nil {
 			writeError(w, r, 500, err.Error())
-			return
-		}
-		executorID, err = a.pickExecutor(r.Context(), ws, provider, "")
-		if err != nil {
-			writeError(w, r, 409, err.Error())
 			return
 		}
 	}
@@ -57,11 +49,22 @@ func (a *App) createIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 500, err.Error())
 		return
 	}
-	var workID string
-	if executorID != "" {
-		err = tx.QueryRow(r.Context(), `insert into work_items(workspace_id,kind,title,prompt,policy,provider,agent_id,executor_id,priority) values($1,'issue',$2,$3,$4,$5,$6,$7,$8) returning id::text`, ws, in.Title, workPrompt, mustJSON(map[string]string{"issue_id": issueID}), provider, nullUUID(agentID), executorID, issuePriorityRank(in.Priority)).Scan(&workID)
+	work := EnqueuedWork{}
+	if in.Assignee != "" {
+		work, err = a.workServiceWith(tx).Enqueue(r.Context(), WorkSpec{
+			WorkspaceID: ws,
+			Kind:        "issue",
+			Title:       in.Title,
+			Prompt:      workPrompt,
+			Policy:      map[string]any{"issue_id": issueID},
+			Provider:    provider,
+			AgentID:     agentID,
+			Priority:    issuePriorityRank(in.Priority),
+			RunKind:     "agent.issue",
+			RunInput:    map[string]any{"issue_id": issueID, "title": in.Title},
+		})
 		if err != nil {
-			writeError(w, r, 500, err.Error())
+			writeError(w, r, 409, err.Error())
 			return
 		}
 	}
@@ -69,13 +72,10 @@ func (a *App) createIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 500, err.Error())
 		return
 	}
-	if workID != "" {
-		if runID, err := a.runStore().Create(r.Context(), ws, "agent.issue", WorkQueued, ref(EntityWork, workID), map[string]any{"issue_id": issueID, "title": in.Title}); err == nil {
-			_, _ = a.db.Exec(r.Context(), `update work_items set run_id=$2 where id=$1`, workID, runID)
-		}
-		a.publish(r.Context(), Event{Type: "work.created", WorkspaceID: ws, ExecutorID: executorID, Payload: map[string]string{"work_id": workID, "issue_id": issueID}, TS: time.Now()})
+	if work.WorkID != "" {
+		a.publishWorkCreated(r.Context(), ws, work, map[string]string{"issue_id": issueID})
 	}
-	writeJSON(w, map[string]any{"id": issueID, "title": in.Title, "status": in.Status, "work_id": workID})
+	writeJSON(w, map[string]any{"id": issueID, "title": in.Title, "status": in.Status, "work_id": work.WorkID})
 }
 
 func issuePriorityRank(priority string) int {

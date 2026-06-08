@@ -23,8 +23,19 @@ func (a *App) sweeper(ctx context.Context) {
 		if rows != nil {
 			rows.Close()
 		}
-		_, _ = a.db.Exec(ctx, `update work_items set status='failed', error='executor offline timeout', completed_at=now()
-where status in ('dispatched','running') and executor_id in (select id from executors where status='offline') and coalesce(started_at,dispatched_at,created_at) < now()-interval '5 minutes'`)
+		failed, _ := a.db.Query(ctx, `update work_items set status=$1, error='executor offline timeout', completed_at=now()
+where status in ($2,$3) and executor_id in (select id from executors where status=$4) and coalesce(started_at,dispatched_at,created_at) < now()-interval '5 minutes'
+returning id::text, workspace_id::text, coalesce(run_id::text,'')`, WorkFailed, WorkDispatched, WorkRunning, ExecutorOffline)
+		for failed != nil && failed.Next() {
+			var workID, ws, runID string
+			_ = failed.Scan(&workID, &ws, &runID)
+			a.runStore().Finish(ctx, runID, WorkFailed, nil, "executor offline timeout")
+			_, _ = a.db.Exec(ctx, `update autopilot_runs set status=$2, completed_at=now() where work_id=$1`, workID, WorkFailed)
+			a.publish(ctx, Event{Type: "work.failed", WorkspaceID: ws, Payload: map[string]string{"work_id": workID}, TS: time.Now()})
+		}
+		if failed != nil {
+			failed.Close()
+		}
 	}
 }
 

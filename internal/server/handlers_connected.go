@@ -509,28 +509,29 @@ func (a *App) enqueueResourceEventAutopilots(ctx context.Context, ws, resourceID
 		if err != nil {
 			continue
 		}
-		execID, err := a.pickExecutor(ctx, ws, provider, "")
-		if err != nil {
-			continue
-		}
-		var workID string
 		workKind := "resource.event"
 		if kind == "email.message" {
 			workKind = "email.triage"
 		} else if kind == "calendar.event" {
 			workKind = "calendar.classify"
 		}
-		if err := a.db.QueryRow(ctx, `insert into work_items(workspace_id,kind,title,prompt,provider,agent_id,executor_id,policy) values($1,$2,$3,$4,$5,$6,$7,$8) returning id::text`, ws, workKind, "Resource event: "+title, fullPrompt, provider, nullUUID(agentID), execID, mustJSON(map[string]any{"resource_id": resourceID, "external_id": externalID, "kind": kind, "autopilot_id": autopilotID})).Scan(&workID); err != nil {
+		runPayload := map[string]any{"source": "resource_event", "resource_id": resourceID, "kind": kind, "external_id": externalID}
+		work, err := a.workService().Enqueue(ctx, WorkSpec{
+			WorkspaceID: ws,
+			Kind:        workKind,
+			Title:       "Resource event: " + title,
+			Prompt:      fullPrompt,
+			Provider:    provider,
+			AgentID:     agentID,
+			Policy:      map[string]any{"resource_id": resourceID, "external_id": externalID, "kind": kind, "autopilot_id": autopilotID},
+			RunKind:     "agent.resource_event",
+			RunInput:    runPayload,
+		})
+		if err != nil {
 			continue
 		}
-		runID := ""
-		runPayload := map[string]any{"source": "resource_event", "resource_id": resourceID, "kind": kind, "external_id": externalID}
-		if rid, err := a.runStore().Create(ctx, ws, "agent.resource_event", WorkQueued, ref(EntityWork, workID), runPayload); err == nil {
-			runID = rid
-			_, _ = a.db.Exec(ctx, `update work_items set run_id=$2 where id=$1`, workID, rid)
-		}
-		_, _ = a.db.Exec(ctx, `insert into autopilot_runs(autopilot_id,workspace_id,status,work_id,run_id,trigger_payload) values($1,$2,$3,$4,$5,$6)`, autopilotID, ws, WorkQueued, workID, nullUUID(runID), mustJSON(runPayload))
-		a.publish(ctx, Event{Type: "work.created", WorkspaceID: ws, ExecutorID: execID, Payload: map[string]string{"work_id": workID}, TS: time.Now()})
+		_, _ = a.db.Exec(ctx, `insert into autopilot_runs(autopilot_id,workspace_id,status,work_id,run_id,trigger_payload) values($1,$2,$3,$4,$5,$6)`, autopilotID, ws, WorkQueued, work.WorkID, nullUUID(work.RunID), mustJSON(runPayload))
+		a.publishWorkCreated(ctx, ws, work, nil)
 	}
 	return rows.Err()
 }
